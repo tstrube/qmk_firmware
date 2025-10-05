@@ -22,14 +22,13 @@
 #define TSF_MIC G(S(KC_M))
 
 // Joysticks
-#define EEPROM_ADDR_JOY_LEFT  0
-#define EEPROM_ADDR_JOY_RIGHT 1
-#define LED_INDEX_JOY_LEFT    6
-#define LED_INDEX_JOY_RIGHT   6
-#define JOY_CENTER            512
-#define JOYSTICK_DEADZONE     200
-#define JOYSTICK_RELEASE      150
-#define RPC_JOYSTICK_AXES     44
+#define EEPROM_ADDR_JOY_LEFT    0
+#define EEPROM_ADDR_JOY_RIGHT   1
+#define LED_INDEX_JOY_MODE      6
+#define JOY_POLLING_INTERVAL   10
+#define JOY_CENTER            127
+#define JOYSTICK_DEADZONE      30
+#define JOYSTICK_RELEASE       15
 
 #define LJOY_UP_POS    (keypos_t){0, 5}
 #define LJOY_DOWN_POS  (keypos_t){1, 5}
@@ -47,10 +46,13 @@
 #define JOY_PIN_Y GP28
 #define JOY_PIN_B GP29
 
-typedef struct {
-    uint16_t x;
-    uint16_t y;
-} joystick_axes_t;
+typedef union {
+    uint8_t raw;
+    struct {
+        bool joystick_digital_left :1;
+        bool joystick_digital_right :1;
+    };
+} user_config_t;
 
 typedef struct {
     bool up;
@@ -60,12 +62,48 @@ typedef struct {
     bool btn;
 } joystick_state_t;
 
-static joystick_axes_t remote_joystick = { JOY_CENTER, JOY_CENTER };
-static joystick_state_t left_digital_state  = {0};
-static joystick_state_t right_digital_state = {0};
+typedef struct {
+    uint8_t x;
+    uint8_t y;
+    bool btn;
+} joystick_adc_t;
 
-bool joystick_digital_left  = true;
-bool joystick_digital_right = true;
+
+user_config_t user_config = {
+    .joystick_digital_left = true,
+    .joystick_digital_right = true
+};
+
+joystick_state_t local_joystick_state = {
+    .up = false,
+    .down = false,
+    .left = false,
+    .right = false,
+    .btn = false
+};
+
+joystick_state_t remote_joystick_state = {
+    .up = false,
+    .down = false,
+    .left = false,
+    .right = false,
+    .btn = false
+};
+
+joystick_adc_t local_joystick_axis = {
+    .x = JOY_CENTER,
+    .y = JOY_CENTER,
+    .btn = false
+};
+
+joystick_adc_t remote_joystick_axis = {
+    .x = JOY_CENTER,
+    .y = JOY_CENTER,
+    .btn = false
+};
+
+static uint32_t init_timeout = 0;
+static bool init_completed = false;
 
 enum joy_keycodes {
     TS_JOYL = SAFE_RANGE,
@@ -96,26 +134,31 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         KC_F14 ,KC_F15 ,KC_F16 ,KC_F17 ,KC_F18 ,KC_F19 ,KC_F20 ,KC_F21 ,KC_F22 ,KC_F23
     ),
     [FN] = LAYOUT(
-        RM_TOGG,_______,KC_F1  ,KC_F2  ,KC_F3  ,KC_F4  ,KC_F5  ,KC_F6  ,QK_BOOT,QK_BOOT,KC_F7  ,KC_F8  ,KC_F9  ,KC_F10 ,KC_F11 ,KC_F12 ,KC_PMNS,KC_PSLS,
-        _______,_______,_______,_______,_______,_______,_______,_______,_______,_______,_______,_______,_______,KC_P7  ,KC_P8  ,KC_P9  ,KC_PPLS,KC_PSLS,
-        RM_NEXT,RM_SPDU,RM_HUEU,RM_SATU,RM_VALU,_______,_______,_______,_______,_______,_______,_______,_______,KC_P4  ,KC_P5  ,KC_P6  ,KC_PPLS,KC_PAST,
-        RM_PREV,RM_SPDD,RM_HUED,RM_SATD,RM_VALD,_______,_______,_______,_______,_______,_______,_______,_______,KC_P1  ,KC_P2  ,KC_P3  ,KC_PENT,KC_PAST,
-        _______,_______,_______,_______,_______,_______,_______,_______,_______,_______,_______,_______,_______,_______,KC_P0  ,KC_COMM,KC_PENT,KC_NUM ,
-        _______,_______,_______,_______,_______,_______,_______,_______,_______,_______
+        RM_TOGG,XXXXXXX,KC_F1  ,KC_F2  ,KC_F3  ,KC_F4  ,KC_F5  ,KC_F6  ,QK_BOOT,QK_BOOT,KC_F7  ,KC_F8  ,KC_F9  ,KC_F10 ,KC_F11 ,KC_F12 ,KC_PMNS,KC_PSLS,
+        XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,KC_P7  ,KC_P8  ,KC_P9  ,KC_PPLS,KC_PSLS,
+        RM_NEXT,RM_SPDU,RM_HUEU,RM_SATU,RM_VALU,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,KC_P4  ,KC_P5  ,KC_P6  ,KC_PPLS,KC_PAST,
+        RM_PREV,RM_SPDD,RM_HUED,RM_SATD,RM_VALD,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,KC_P1  ,KC_P2  ,KC_P3  ,KC_PENT,KC_PAST,
+        XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,KC_P0  ,KC_COMM,KC_PENT,KC_NUM ,
+        XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX,XXXXXXX
     )
 };
+
+void save_user_eeprom(void) {
+    eeconfig_update_user(user_config.raw);
+    transaction_rpc_send(RPC_USER_CONFIG, sizeof(user_config.raw), &user_config.raw);
+}
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (record->event.pressed) {
         switch (keycode) {
             case TS_JOYL:
-                joystick_digital_left = !joystick_digital_left;
-                eeprom_update_byte((uint8_t*)EEPROM_ADDR_JOY_LEFT, joystick_digital_left);
+                user_config.joystick_digital_left = !user_config.joystick_digital_left;
+                save_user_eeprom();
                 return false;
 
             case TS_JOYR:
-                joystick_digital_right = !joystick_digital_right;
-                eeprom_update_byte((uint8_t*)EEPROM_ADDR_JOY_RIGHT, joystick_digital_right);
+                user_config.joystick_digital_right = !user_config.joystick_digital_right;
+                save_user_eeprom();
                 return false;
         }
     }
@@ -130,20 +173,15 @@ void set_status_led(uint8_t i, bool digital) {
     rgb_matrix_set_color(i, rgb.r, rgb.g, rgb.b);
 }
 
-bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
-    if (is_keyboard_left()) {
-        set_status_led(LED_INDEX_JOY_LEFT, joystick_digital_left);
-    } else {
-        set_status_led(LED_INDEX_JOY_RIGHT, joystick_digital_right);
-    }
+bool rgb_matrix_indicators_user(void) {
+    set_status_led(LED_INDEX_JOY_MODE, is_keyboard_left() ? user_config.joystick_digital_left : user_config.joystick_digital_right);
     return false;
 }
 
-static void handle_joystick(bool digital_mode, joystick_axes_t raw, bool btn_pressed,
-                            joystick_state_t* state, uint8_t analog_index, int js_btn,
+static void handle_joystick(bool digital_mode, joystick_adc_t* adc, joystick_state_t* state, int js_btn,
                             keypos_t up, keypos_t down, keypos_t left, keypos_t right, keypos_t btn) {
-    int16_t x = raw.x - JOY_CENTER;
-    int16_t y = raw.y - JOY_CENTER;
+    int16_t x = adc->x - JOY_CENTER;
+    int16_t y = adc->y - JOY_CENTER;
 
     layer_state_t layer = get_highest_layer(layer_state | default_layer_state);
 
@@ -185,10 +223,10 @@ static void handle_joystick(bool digital_mode, joystick_axes_t raw, bool btn_pre
         }
 
         // BUTTON
-        if (btn_pressed && !state->btn) {
+        if (adc->btn && !state->btn) {
             register_code16(keymap_key_to_keycode(layer, btn));
             state->btn = true;
-        } else if (!btn_pressed && state->btn) {
+        } else if (!adc->btn && state->btn) {
             unregister_code16(keymap_key_to_keycode(layer, btn));
             state->btn = false;
         }
@@ -201,10 +239,10 @@ static void handle_joystick(bool digital_mode, joystick_axes_t raw, bool btn_pre
         if (state->right) { unregister_code16(keymap_key_to_keycode(layer, right)); state->right = false; }
         if (state->btn)   { unregister_code16(keymap_key_to_keycode(layer, btn));   state->btn = false; }
 
-        if (btn_pressed && !state->btn) {
+        if (adc->btn && !state->btn) {
             register_code16(js_btn);
             state->btn = true;
-        } else if (!btn_pressed && state->btn) {
+        } else if (!adc->btn && state->btn) {
             unregister_code16(js_btn);
             state->btn = false;
         }
@@ -212,53 +250,73 @@ static void handle_joystick(bool digital_mode, joystick_axes_t raw, bool btn_pre
 }
 
 void matrix_scan_user(void) {
-    joystick_axes_t raw = {
-        .x = analogReadPin(JOY_PIN_X),
-        .y = analogReadPin(JOY_PIN_Y)
+    local_joystick_axis = (joystick_adc_t){
+        .x = analogReadPin(JOY_PIN_X) >> 4,
+        .y = analogReadPin(JOY_PIN_Y) >> 4,
+        .btn = !readPin(JOY_PIN_B) // Active low
     };
-    bool btn = !readPin(JOY_PIN_B); // Active low
 
     if (is_keyboard_left()) {
-        handle_joystick(joystick_digital_left , raw, btn, &left_digital_state , 0, JS_0,
-                        LJOY_UP_POS, LJOY_DOWN_POS, LJOY_LEFT_POS, LJOY_RIGHT_POS, LJOY_BTN_POS);
+        handle_joystick(user_config.joystick_digital_left,
+            is_keyboard_master() ? &local_joystick_axis : &remote_joystick_axis,
+            is_keyboard_master() ? &local_joystick_state : &remote_joystick_state,
+            JS_0, LJOY_UP_POS, LJOY_DOWN_POS, LJOY_LEFT_POS, LJOY_RIGHT_POS, LJOY_BTN_POS);
+        joystick_set_axis(0, user_config.joystick_digital_left  ? 0 : local_joystick_axis.x);
+        joystick_set_axis(1, user_config.joystick_digital_left  ? 0 : local_joystick_axis.y);
+        joystick_set_axis(2, user_config.joystick_digital_right ? 0 : remote_joystick_axis.x);
+        joystick_set_axis(3, user_config.joystick_digital_right ? 0 : remote_joystick_axis.y);
     } else {
-        handle_joystick(joystick_digital_right, raw, btn, &right_digital_state, 2, JS_1,
-                        RJOY_UP_POS, RJOY_DOWN_POS, RJOY_LEFT_POS, RJOY_RIGHT_POS, RJOY_BTN_POS);
-    }
-
-    if (is_keyboard_master()) {
-        if (is_keyboard_left()) {
-            joystick_set_axis(0, joystick_digital_left  ? 0 : raw.x);
-            joystick_set_axis(1, joystick_digital_left  ? 0 : raw.y);
-            joystick_set_axis(2, joystick_digital_right ? 0 : remote_joystick.x);
-            joystick_set_axis(3, joystick_digital_right ? 0 : remote_joystick.y);
-        } else {
-            joystick_set_axis(0, joystick_digital_left  ? 0 : remote_joystick.x);
-            joystick_set_axis(1, joystick_digital_left  ? 0 : remote_joystick.y);
-            joystick_set_axis(2, joystick_digital_right ? 0 : raw.x);
-            joystick_set_axis(3, joystick_digital_right ? 0 : raw.y);
-        }
-    } else {
-        transaction_rpc_send(RPC_JOYSTICK_AXES, sizeof(raw), &raw);
+        handle_joystick(user_config.joystick_digital_right,
+            is_keyboard_master() ? &remote_joystick_axis : &local_joystick_axis,
+            is_keyboard_master() ? &remote_joystick_state : &local_joystick_state,
+            JS_1, RJOY_UP_POS, RJOY_DOWN_POS, RJOY_LEFT_POS, RJOY_RIGHT_POS, RJOY_BTN_POS);
+        joystick_set_axis(0, user_config.joystick_digital_left  ? 0 : remote_joystick_axis.x);
+        joystick_set_axis(1, user_config.joystick_digital_left  ? 0 : remote_joystick_axis.y);
+        joystick_set_axis(2, user_config.joystick_digital_right ? 0 : local_joystick_axis.x);
+        joystick_set_axis(3, user_config.joystick_digital_right ? 0 : local_joystick_axis.y);
     }
 }
 
-void receive_joystick_axes(uint8_t type, const void *data, uint8_t size, void *context) {
-    if (size == sizeof(joystick_axes_t)) {
-        memcpy(&remote_joystick, data, size);
+void receive_joystick(uint8_t in_len, const void *in_buf, uint8_t out_len, void *out_buf) {
+    if (in_len == sizeof(joystick_adc_t)) {
+        memcpy(&remote_joystick_axis, in_buf, in_len);
+    }
+}
+
+void receive_user_config(uint8_t in_len, const void *in_buf, uint8_t out_len, void *out_buf) {
+    if (in_len == sizeof(user_config_t)) {
+        memcpy(&user_config, in_buf, in_len);
     }
 }
 
 void keyboard_post_init_user(void) {
     setPinInputHigh(JOY_PIN_B);
 
-    if (is_keyboard_left()) {
-        joystick_digital_left  = eeprom_read_byte((uint8_t*)EEPROM_ADDR_JOY_LEFT);
-    } else {
-        joystick_digital_right = eeprom_read_byte((uint8_t*)EEPROM_ADDR_JOY_RIGHT);
-    }
-
     if (is_keyboard_master()) {
-        transaction_register_rpc(RPC_JOYSTICK_AXES, receive_joystick_axes);
+        init_timeout = timer_read32();
+        user_config.raw = eeconfig_read_user();
+        transaction_register_rpc(RPC_JOYSTICK_AXES, receive_joystick);
+    } else {
+        transaction_register_rpc(RPC_USER_CONFIG, receive_user_config);
+    }
+}
+
+void housekeeping_task_user(void) {
+    if (is_keyboard_master()) {
+        if (!init_completed && timer_elapsed32(init_timeout) > 2000) {
+            transaction_rpc_send(RPC_USER_CONFIG, sizeof(user_config.raw), &user_config.raw);
+            init_completed = true;
+        }
+    } else {
+        static uint32_t last_sync = 0;
+        if (timer_elapsed32(last_sync) > JOY_POLLING_INTERVAL) {
+            last_sync = timer_read32();
+            remote_joystick_axis = (joystick_adc_t){
+                .x = analogReadPin(JOY_PIN_X) >> 4,
+                .y = analogReadPin(JOY_PIN_Y) >> 4,
+                .btn = !readPin(JOY_PIN_B) // Active low
+            };
+            transaction_rpc_send(RPC_JOYSTICK_AXES, sizeof(remote_joystick_axis), &remote_joystick_axis);
+        }
     }
 }

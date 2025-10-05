@@ -3,9 +3,6 @@
     "keyboard_name": "Splitto Dogu 2",
     "maintainer": "tstrube",
     "bootloader": "rp2040",
-    "build": {
-        "firmware_format": "uf2"
-    },
     "diode_direction": "COL2ROW",
     "features": {
         "console": true,
@@ -17,21 +14,13 @@
     },
     "joystick": {
         "axes": {
-            "x": {
-                "high": 1023,
-                "input_pin": "GP28",
-                "low": 0,
-                "rest": 512
-            },
-            "y": {
-                "high": 1023,
-                "input_pin": "GP27",
-                "low": 0,
-                "rest": 512
-            }
+            "x": "virtual",
+            "y": "virtual",
+            "rx": "virtual",
+            "ry": "virtual"
         },
-        "axis_resolution": 10,
-        "button_count": 1
+        "button_count": 2,
+        "enabled": true
     },
     "matrix_pins": {
         "cols": ["GP2", "GP3", "GP4", "GP5", "GP6", "GP7", "GP12", "GP13", "GP24"],
@@ -163,7 +152,7 @@
             "protocol": "serial",
             "sync": {
                 "layer_state": true,
-                "matrix_state": true,
+                "matrix_state": false,
                 "modifiers": true
             },
             "watchdog": true
